@@ -1,1 +1,0 @@
-{"version":3,"file":"signer-error.js","sourceRoot":"","sources":["../../src/cryptopro/signer-error.ts"],"names":[],"mappings":";;;AAYA,MAAa,WAAY,SAAQ,KAAK;IAIpC,YAAY,IAAqB,EAAE,OAAe,EAAE,OAAiB;QACnE,KAAK,CAAC,OAAO,CAAC,CAAC;QACf,IAAI,CAAC,IAAI,GAAG,IAAI,CAAC;QACjB,IAAI,CAAC,OAAO,GAAG,OAAO,CAAC;IACzB,CAAC;CACF;AATD,kCASC"}
