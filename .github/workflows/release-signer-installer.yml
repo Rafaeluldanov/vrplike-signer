@@ -11,29 +11,22 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node (with pnpm cache)
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "pnpm"
-          cache-dependency-path: pnpm-lock.yaml
 
-      # ВАЖНО: НЕ указываем version здесь, иначе будет конфликт с packageManager в package.json
-      - name: Setup pnpm (uses packageManager from package.json)
+      # ✅ Fix: pnpm must exist in PATH on Windows runner.
+      # Also must match package.json "packageManager": "pnpm@9.15.9"
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
+          version: "9.15.9"
           run_install: false
-
-      - name: Show pnpm version
-        shell: pwsh
-        run: |
-          pnpm -v
-          node -v
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -43,10 +36,10 @@ jobs:
         with:
           dotnet-version: "6.0.x"
 
-      - name: Build agent (pkg → vrplike-signer.exe)
+      - name: Build agent (pkg -> vrplike-signer.exe)
         run: pnpm -w run signer:build:agent:win
 
-      - name: Build tray-host (dotnet publish → vrplike-signer-tray.exe)
+      - name: Build tray-host (dotnet publish -> vrplike-signer-tray.exe)
         run: pnpm -w run signer:build:tray-host:win
 
       - name: Prepare installer build inputs
@@ -56,24 +49,39 @@ jobs:
         run: choco install innosetup -y
 
       - name: Build installer (ISCC)
+        id: build_installer
         shell: pwsh
         run: |
-          iscc installer/vrplike-signer.iss /DAppVersion=${{ inputs.appVersion }}
+          # Find .iss (supports both "installer/vrplike-signer.iss" and "installer/installer/vrplike-signer.iss")
+          $iss1 = "installer\vrplike-signer.iss"
+          $iss2 = "installer\installer\vrplike-signer.iss"
+          if (Test-Path $iss1) { $iss = $iss1 }
+          elseif (Test-Path $iss2) { $iss = $iss2 }
+          else { throw "Inno script not found. Tried: $iss1, $iss2" }
 
-      - name: List produced files (debug)
+          # Find ISCC.exe (choco path may differ)
+          $iscc1 = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $iscc2 = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc1) { $iscc = $iscc1 }
+          elseif (Test-Path $iscc2) { $iscc = $iscc2 }
+          else { throw "ISCC.exe not found after choco install." }
+
+          & $iscc $iss "/DAppVersion=${{ inputs.appVersion }}"
+
+      - name: Locate installer output
+        id: locate
         shell: pwsh
         run: |
-          Write-Host "== installer/dist =="
-          if (Test-Path "installer/dist") { Get-ChildItem -Recurse "installer/dist" | Select-Object FullName, Length } else { Write-Host "installer/dist not found" }
-          Write-Host "== installer/Output =="
-          if (Test-Path "installer/Output") { Get-ChildItem -Recurse "installer/Output" | Select-Object FullName, Length } else { Write-Host "installer/Output not found" }
-          Write-Host "== installer/build =="
-          if (Test-Path "installer/build") { Get-ChildItem -Recurse "installer/build" | Select-Object FullName, Length } else { Write-Host "installer/build not found" }
+          $out = Get-ChildItem -Path "installer" -Recurse -File -Filter "*.exe" |
+            Where-Object { $_.Name -match "signer-setup" } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $out) { throw "Installer exe not found under installer/. Check OutputDir/OutputBaseFilename in .iss." }
+          "path=$($out.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Installer: $($out.FullName)"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vrplike-signer-setup
-          path: |
-            installer/dist/*.exe
-            installer/Output/*.exe
+          name: vrplike-signer-setup-${{ inputs.appVersion }}
+          path: ${{ steps.locate.outputs.path }}
