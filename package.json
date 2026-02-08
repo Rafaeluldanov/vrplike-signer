@@ -4,7 +4,7 @@
   "packageManager": "pnpm@9.15.9",
   "scripts": {
     "signer:build:agent:win": "pnpm --filter @vrplike/edo-signer-agent package:win",
-    "signer:build:tray-host:win": "dotnet publish apps/edo-signer-tray-host -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:DebugType=None -p:DebugSymbols=false -o installer/build",
+    "signer:build:tray-host:win": "dotnet publish apps/edo-signer-tray-host -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:DebugType=None -p:DebugSymbols=false -o installer/build && node -e \"const fs=require('fs');const path=require('path');const dir='installer/build';const files=fs.existsSync(dir)?fs.readdirSync(dir).filter(f=>f.toLowerCase().endsWith('.exe')):[];if(!files.length){console.error('No exe produced in '+dir);process.exit(2)}const src=path.join(dir,files[0]);const dst=path.join(dir,'vrplike-signer-tray.exe');if(src!==dst){fs.copyFileSync(src,dst);}const s=fs.statSync(dst).size;if(!s){console.error('Empty tray exe: '+dst);process.exit(3)}console.log('Tray exe ready:',dst,'size',s,'src',src);\"",
     "signer:prepare:installer": "node scripts/edo/prepare-signer-installer-build.js"
   }
 }
