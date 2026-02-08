@@ -15,7 +15,9 @@
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
-    "pkg": "5.8.1"
+    "pkg": "5.8.1",
+    "typescript": "^5.4.5",
+    "@types/node": "^20.11.30"
   },
   "pkg": {
     "assets": [
