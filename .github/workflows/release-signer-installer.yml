@@ -1,0 +1,56 @@
+name: release-signer-installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      appVersion:
+        description: "Signer app version for installer (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9"
+
+      - name: Install dependencies
+        run: pnpm -w install --frozen-lockfile
+
+      - name: Build agent (pkg → vrplike-signer.exe)
+        run: pnpm -w run signer:build:agent:win
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Build tray-host (dotnet publish → vrplike-signer-tray.exe)
+        run: pnpm -w run signer:build:tray-host:win
+
+      - name: Prepare installer build inputs
+        run: pnpm -w run signer:prepare:installer
+
+      - name: Install Inno Setup (ISCC)
+        run: choco install innosetup -y
+
+      - name: Build installer (ISCC)
+        run: iscc installer/vrplike-signer.iss /DAppVersion=${{ inputs.appVersion }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrplike-signer-setup
+          path: installer/dist/vrplike-signer-setup.exe
+
