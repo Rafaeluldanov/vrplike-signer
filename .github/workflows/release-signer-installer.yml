@@ -11,30 +11,36 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node (with pnpm cache)
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: pnpm-lock.yaml
 
-      - name: Enable Corepack (use pnpm from packageManager)
+      - name: Enable Corepack + activate pnpm from package.json
+        shell: pwsh
         run: |
           corepack enable
+          # Use the exact version declared in package.json: packageManager = "pnpm@9.15.9"
+          corepack prepare pnpm@9.15.9 --activate
           pnpm -v
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build agent (pkg → vrplike-signer.exe)
-        run: pnpm -w run signer:build:agent:win
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "6.0.x"
+
+      - name: Build agent (pkg → vrplike-signer.exe)
+        run: pnpm -w run signer:build:agent:win
 
       - name: Build tray-host (dotnet publish → vrplike-signer-tray.exe)
         run: pnpm -w run signer:build:tray-host:win
@@ -46,10 +52,24 @@ jobs:
         run: choco install innosetup -y
 
       - name: Build installer (ISCC)
-        run: iscc installer/vrplike-signer.iss /DAppVersion=${{ inputs.appVersion }}
+        shell: pwsh
+        run: |
+          iscc installer/vrplike-signer.iss /DAppVersion=${{ inputs.appVersion }}
+
+      - name: List produced files (debug)
+        shell: pwsh
+        run: |
+          Write-Host "== installer/dist =="
+          if (Test-Path "installer/dist") { Get-ChildItem -Recurse "installer/dist" | Select-Object FullName, Length } else { Write-Host "installer/dist not found" }
+          Write-Host "== installer/Output =="
+          if (Test-Path "installer/Output") { Get-ChildItem -Recurse "installer/Output" | Select-Object FullName, Length } else { Write-Host "installer/Output not found" }
+          Write-Host "== installer/build =="
+          if (Test-Path "installer/build") { Get-ChildItem -Recurse "installer/build" | Select-Object FullName, Length } else { Write-Host "installer/build not found" }
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: vrplike-signer-setup
-          path: installer/dist/vrplike-signer-setup.exe
+          path: |
+            installer/dist/*.exe
+            installer/Output/*.exe
