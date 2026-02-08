@@ -11,6 +11,7 @@ import {
 import { resolveCryptoProTool } from './cryptopro-tool-resolver';
 import { spawnWithTimeout } from './spawn';
 import { SignerError, type SignerErrorCode } from './signer-error';
+import { signBase64ViaCadesCom } from '../crypto/cadescom-signing';
 
 export { SignerError, type SignerErrorCode };
 
@@ -61,6 +62,56 @@ export async function signAuthChallengeAttached(
     );
   }
 
+  // Windows-first invariant (MVP):
+  // Prefer COM-based CAdESCOM signing. Do NOT require cryptcp/csptest in PATH.
+  // Fallback to CryptoPro CLI only when CAdESCOM is not available (dev/non-standard installs).
+  let resolvedWinCliTool: Awaited<ReturnType<typeof resolveCryptoProTool>> | null = null;
+  if (process.platform === 'win32' && selection.kind === 'thumbprint') {
+    try {
+      const dataBase64 = Buffer.from(challenge, 'utf8').toString('base64');
+      const r = await signBase64ViaCadesCom({ dataBase64, thumbprint: selection.thumbprint });
+      const bytes = Buffer.from(r.signatureBase64, 'base64');
+      if (!bytes.length) {
+        throw new SignerError('SIGNING_FAILED', 'Подпись не выполнена (пустой результат CAdESCOM).', {
+          thumbprint: selection.thumbprint,
+        });
+      }
+      return bytes;
+    } catch (e: any) {
+      if (e instanceof SignerError) {
+        if (e.code === 'CERT_NOT_FOUND' || e.code === 'CERT_NO_PRIVATE_KEY') {
+          // Strict UX: cert problems are final (do not fallback to CLI).
+          throw e;
+        }
+        if (e.code === 'CADESCOM_NOT_AVAILABLE') {
+          // Allow fallback to CLI only if tools are present; otherwise, surface COM-specific error.
+          try {
+            resolvedWinCliTool = await resolveCryptoProTool({
+              preferredTool: config.tool,
+              envCryptcpPath: process.env.CRYPTCP_PATH ?? null,
+              envCsptestPath: process.env.CSPTEST_PATH ?? null,
+              cryptoProHome: config.cryptoProHome ?? process.env.CRYPTOPRO_HOME ?? null,
+            });
+          } catch (cliErr: any) {
+            if (cliErr instanceof SignerError && cliErr.code === 'SIGNING_TOOL_NOT_FOUND') {
+              throw e;
+            }
+            throw cliErr;
+          }
+          // Continue to CLI path below.
+        } else if (e.code === 'SIGNING_FAILED') {
+          throw e;
+        } else {
+          throw new SignerError('SIGNING_FAILED', 'Подпись не выполнена (CAdESCOM).', {
+            ...(e.details ?? {}),
+            thumbprint: selection.thumbprint,
+          });
+        }
+      }
+      throw new SignerError('SIGNING_FAILED', `Подпись не выполнена (CAdESCOM): ${String(e?.message ?? e)}`);
+    }
+  }
+
   const tmpBase = config.tmpDir;
   const dir = await mkdtemp(path.join(tmpBase, 'vrplike-cryptopro-'));
   const inPath = path.join(dir, 'input.txt');
@@ -74,12 +125,13 @@ export async function signAuthChallengeAttached(
     // On non-Windows: keep legacy behavior (PATH-based).
     const resolved =
       process.platform === 'win32'
-        ? await resolveCryptoProTool({
+        ? resolvedWinCliTool ??
+          (await resolveCryptoProTool({
             preferredTool: config.tool,
             envCryptcpPath: process.env.CRYPTCP_PATH ?? null,
             envCsptestPath: process.env.CSPTEST_PATH ?? null,
             cryptoProHome: config.cryptoProHome ?? process.env.CRYPTOPRO_HOME ?? null,
-          })
+          }))
         : null;
 
     const effectiveTool = (resolved?.tool ?? config.tool) as 'cryptcp' | 'csptest';

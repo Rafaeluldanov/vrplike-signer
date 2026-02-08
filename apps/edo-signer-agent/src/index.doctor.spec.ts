@@ -16,6 +16,9 @@ describe('index --doctor', () => {
       appDataFallback: 'C:\\Users\\x\\AppData\\Roaming',
       agentJsonPath: 'C:\\Users\\x\\AppData\\Roaming\\vrplike-signer\\agent.json',
       signing: {
+        cadescom: { ok: true },
+        selectedThumbprint: { value: 'AABBCC', source: 'env:CERTIFICATE_REF' },
+        certInStore: { ok: true, exists: true, hasPrivateKey: true, foundInStore: 'Cert:\\CurrentUser\\My', checkedStores: ['Cert:\\CurrentUser\\My','Cert:\\LocalMachine\\My'] },
         readiness: { ok: true, totalCertCount: 2, privateKeyCertCount: 1, sampleThumbprint: 'AABB' },
         tools: {
           ok: false,
@@ -43,6 +46,10 @@ describe('index --doctor', () => {
     expect(out).toContain(`os.homedir(): ${info.osHomedir}`);
     expect(out).toContain(`calculated appDataFallback: ${info.appDataFallback}`);
     expect(out).toContain(`agent.json: ${info.agentJsonPath}`);
+    expect(out).toContain('CAdESCOM available: YES');
+    expect(out).toContain('cert thumbprint selected: AABBCC');
+    expect(out).toContain('cert exists in store: YES');
+    expect(out).toContain('cert has private key: YES');
     expect(out).toContain('windows cert-store readiness: OK');
     expect(out).toContain('signing tools (cryptcp/csptest): NOT FOUND');
     expect(out).toContain('signing tools checked paths:');

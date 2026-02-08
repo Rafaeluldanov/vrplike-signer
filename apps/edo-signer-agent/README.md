@@ -16,10 +16,11 @@
 - **Готовность к подписи (readiness)**: в хранилище сертификатов Windows должен быть **хотя бы один сертификат с доступным закрытым ключом**
   - проверяются `CurrentUser\My` и `LocalMachine\My`
   - если сертификата с закрытым ключом нет — агент будет возвращать `CERT_NOT_FOUND`
-- Для **текущего способа подписи** агенту нужны утилиты CryptoPro Tools: `cryptcp.exe` / `csptest.exe`
-  - если утилиты отсутствуют — при попытке подписи будет ошибка `SIGNING_TOOL_NOT_FOUND` (это **не означает**, что CSP не установлен)
+- **Основной способ подписи (Windows)**: через **CAdESCOM (COM)** (PowerShell), **без зависимости от** `cryptcp.exe` / `csptest.exe`
+  - отсутствие `cryptcp/csptest` — это нормально
+  - `cryptcp/csptest` остаются только как **fallback** для dev/нестандартных окружений
 - CryptoPro CSP должен быть установлен/доступен в системе, а сертификат/контейнер — доступен на этой машине (реестр/токен/смарт‑карта)
-- Агент **автоматически находит** `cryptcp.exe` / `csptest.exe` (без настройки `PATH`, без PowerShell, без прав администратора)
+- (Fallback) Агент **автоматически находит** `cryptcp.exe` / `csptest.exe` (без настройки `PATH`, без прав администратора)
   - при необходимости можно задать override:
     - `CRYPTCP_PATH` / `CSPTEST_PATH` (абсолютный путь к exe)
     - `CRYPTOPRO_HOME` (каталог, где лежат `cryptcp.exe` / `csptest.exe`)
@@ -44,7 +45,7 @@ Runtime:
 
 ### CryptoPro autodetect (Windows)
 
-На Windows агент ищет CryptoPro tools в порядке:
+Если включён/нужен fallback на CryptoPro tools, агент ищет `cryptcp/csptest` в порядке:
 
 1) `CRYPTCP_PATH` / `CSPTEST_PATH` (если файл существует)  
 2) `CRYPTOPRO_HOME\\cryptcp.exe` / `CRYPTOPRO_HOME\\csptest.exe`  
@@ -191,16 +192,24 @@ pnpm --filter @vrplike/edo-signer-agent smoke:sign-challenge -- --challenge "pin
 - **“не найден сертификат / NO_CERTIFICATE_SELECTED”**:
   - передайте `--certificateRef` (thumbprint) в smoke, или
   - задайте `CERT_THUMBPRINT` / `CERT_SUBJECT` / `CONTAINER_NAME`
-- **`SIGNING_TOOL_NOT_FOUND`** (нет `cryptcp/csptest`):
-  - установите **CryptoPro Tools** (утилиты `cryptcp.exe` / `csptest.exe`)
-  - для диагностики запустите `vrplike-signer.exe --doctor` (покажет readiness и проверенные пути)
-  - при необходимости задайте override `CRYPTCP_PATH` / `CSPTEST_PATH` / `CRYPTOPRO_HOME`
+- **CryptoPro CSP установлен, но `cryptcp/csptest` отсутствуют**:
+  - это нормально: на Windows signer подписывает через **CAdESCOM (COM)** и не требует CLI утилит
+  - для проверки запустите `vrplike-signer.exe --doctor` (покажет `CAdESCOM available` и `cert exists in store`)
+- **`CADESCOM_NOT_AVAILABLE`**:
+  - на машине не доступна компонента CAdESCOM (COM не зарегистрирован/не установлен)
+  - установите/включите компоненты CryptoPro/CAdESCOM (часто ставится вместе с CryptoPro CSP / плагином), затем повторите
+  - проверьте через `vrplike-signer.exe --doctor`
+- **`SIGNING_TOOL_NOT_FOUND`** (fallback): 
+  - это относится только к CLI fallback (`cryptcp/csptest`) и **не означает**, что CSP не установлен
+  - если вам нужен CLI fallback (dev/нестандартные окружения) — установите **CryptoPro Tools** или задайте `CRYPTCP_PATH` / `CSPTEST_PATH` / `CRYPTOPRO_HOME`
 - **`CERT_NOT_FOUND`** (нет сертификата с закрытым ключом):
   - установите сертификат в хранилище Windows или подключите токен/смарт‑карту
   - убедитесь, что закрытый ключ доступен текущему пользователю/службе
+- **`CERT_NO_PRIVATE_KEY`**:
+  - сертификат по thumbprint найден, но закрытый ключ недоступен текущему пользователю/службе
 - **“нужен PIN”**:
   - задайте `CERT_PIN` и добавьте `{PIN}` в args template (если ваша версия CLI поддерживает передачу PIN)
-- **“ошибка подписи / SIGN_FAILED”**:
+- **“ошибка подписи / SIGNING_FAILED / SIGN_FAILED”**:
   - включите корректные флаги через `CRYPTCP_ARGS_TEMPLATE` / `CSPTEST_ARGS_TEMPLATE`
   - проверьте, что выбранный сертификат доступен текущему пользователю/службе
 - **“выбран не тот сертификат”**:

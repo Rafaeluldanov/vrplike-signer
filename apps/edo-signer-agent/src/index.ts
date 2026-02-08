@@ -9,6 +9,7 @@ import * as readline from 'readline';
 import { signAuthChallengeAttached, SignerError } from './cryptopro/cryptopro-signer';
 import { listCertificatesCertmgr } from './cryptopro/cryptopro-certmgr';
 import { resolveCryptoProTool } from './cryptopro/cryptopro-tool-resolver';
+import { looksLikeThumbprint, normalizeThumbprint } from './cryptopro/cryptopro-config';
 import { chooseCertificateThumbprint, filterCertificatesByInn } from './certificate-selection';
 import { apiBaseFromWsUrl, exchangeDeeplinkToken, parseVrplikeSignerDeeplink } from './deeplink';
 import { promptSelectCertificateWinHta } from './ui/win-hta-cert-select';
@@ -231,6 +232,13 @@ export type DoctorInfo = {
   agentJsonPath: string;
   registryCheck: RegistryCheck | null;
   signing?: {
+    cadescom?:
+      | { ok: true }
+      | { ok: false; message: string; details?: { hresult?: string; raw?: string } };
+    selectedThumbprint?: { value: string | null; source?: string };
+    certInStore?:
+      | { ok: true; exists: boolean; hasPrivateKey: boolean | null; foundInStore?: string; checkedStores: string[] }
+      | { ok: false; message: string };
     readiness:
       | { ok: true; totalCertCount: number; privateKeyCertCount: number; sampleThumbprint?: string }
       | { ok: false; code: string; message: string };
@@ -265,6 +273,34 @@ export function formatDoctorReport(info: DoctorInfo): string {
   lines.push(`calculated appDataFallback: ${info.appDataFallback}`);
   lines.push(`agent.json: ${info.agentJsonPath}`);
   if (info.signing) {
+    const c = info.signing.cadescom as any;
+    if (c) {
+      lines.push(`CAdESCOM available: ${c.ok ? 'YES' : 'NO'}`);
+      if (!c.ok) {
+        const msg = String(c.message ?? '').trim();
+        if (msg) lines.push(`CAdESCOM message: ${msg}`);
+      }
+    }
+
+    const sel = info.signing.selectedThumbprint as any;
+    if (sel) {
+      const v = sel.value ? String(sel.value) : '-';
+      lines.push(`cert thumbprint selected: ${v}${sel.source ? ` (source=${String(sel.source)})` : ''}`);
+    }
+
+    const ce = info.signing.certInStore as any;
+    if (ce) {
+      if (ce.ok) {
+        lines.push(`cert exists in store: ${ce.exists ? 'YES' : 'NO'}`);
+        lines.push(`cert has private key: ${ce.hasPrivateKey === true ? 'YES' : ce.hasPrivateKey === false ? 'NO' : 'UNKNOWN'}`);
+        if (ce.foundInStore) lines.push(`cert found in store: ${String(ce.foundInStore)}`);
+      } else {
+        lines.push('cert exists in store: UNKNOWN');
+        const msg = String(ce.message ?? '').trim();
+        if (msg) lines.push(`cert store probe message: ${msg}`);
+      }
+    }
+
     const r = info.signing.readiness as any;
     if (r?.ok) {
       lines.push(
@@ -431,6 +467,112 @@ async function runDoctor(args: { statePath: string }): Promise<void> {
           })
       : ({ ok: false as const, code: 'N/A', message: 'n/a (non-windows)' } as const);
 
+  const selectedThumbprint = (() => {
+    const envRef = toNonEmptyString(process.env.CERTIFICATE_REF);
+    if (envRef && looksLikeThumbprint(envRef)) return { value: normalizeThumbprint(envRef), source: 'env:CERTIFICATE_REF' };
+
+    const state = loadState(args.statePath);
+    const stateRef = toNonEmptyString(state?.certificateRef);
+    if (stateRef && looksLikeThumbprint(stateRef)) return { value: normalizeThumbprint(stateRef), source: 'agent.json:certificateRef' };
+
+    const envThumb = toNonEmptyString(process.env.CERT_THUMBPRINT);
+    if (envThumb && looksLikeThumbprint(envThumb)) return { value: normalizeThumbprint(envThumb), source: 'env:CERT_THUMBPRINT' };
+
+    const pinned = state?.pinnedThumbprintsByInn && typeof state.pinnedThumbprintsByInn === 'object' ? state.pinnedThumbprintsByInn : null;
+    if (pinned && Object.keys(pinned).length === 1) {
+      const inn = Object.keys(pinned)[0]!;
+      const v = toNonEmptyString((pinned as any)[inn]);
+      if (v && looksLikeThumbprint(v)) return { value: normalizeThumbprint(v), source: `agent.json:pinnedThumbprintsByInn:${inn}` };
+    }
+    return { value: null, source: undefined };
+  })();
+
+  const cadescom =
+    process.platform !== 'win32'
+      ? ({ ok: false as const, message: 'n/a (non-windows)' } as const)
+      : (() => {
+          // Probe COM availability without side effects.
+          const probeScript =
+            "try { New-Object -ComObject 'CAdESCOM.CadesSignedData' | Out-Null; [Console]::Out.Write('YES'); exit 0 } catch { $hr=$null; try{$hr=('0x{0:X8}' -f $_.Exception.HResult)} catch{}; [Console]::Out.Write('NO'); [Console]::Error.Write($_.Exception.Message); exit 1 }";
+          try {
+            const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', probeScript], {
+              windowsHide: true,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              encoding: 'utf8',
+              maxBuffer: 1024 * 1024,
+            });
+            const out = String(r.stdout ?? '').trim().toUpperCase();
+            if (r.status === 0 && out.includes('YES')) return { ok: true as const };
+            const raw = String(r.stderr ?? '').trim();
+            const m = raw;
+            const hrMatch = m.match(/0x[0-9A-Fa-f]{8}/);
+            return {
+              ok: false as const,
+              message: 'CAdESCOM COM component is not available.',
+              details: { hresult: hrMatch ? hrMatch[0] : undefined, raw: raw || undefined },
+            };
+          } catch (e: any) {
+            return { ok: false as const, message: e instanceof Error ? e.message : String(e) };
+          }
+        })();
+
+  const certInStore =
+    process.platform !== 'win32'
+      ? ({ ok: false as const, message: 'n/a (non-windows)' } as const)
+      : !selectedThumbprint.value
+        ? ({
+            ok: false as const,
+            message:
+              'No certificate thumbprint selected. Provide CERTIFICATE_REF/CERT_THUMBPRINT (thumbprint) or pin a thumbprint by INN during signing.',
+          } as const)
+        : (() => {
+          const probeScript = [
+            "$ErrorActionPreference='Stop'",
+            "$thumb = (($env:VRPLIKE_PROBE_THUMBPRINT) -replace '[^0-9a-fA-F]', '').ToUpper()",
+            "$stores = @('Cert:\\CurrentUser\\My','Cert:\\LocalMachine\\My')",
+            'foreach ($s in $stores) {',
+            '  try {',
+            "    $c = Get-ChildItem -Path $s | Where-Object { (($_.Thumbprint -replace '\\s','').ToUpper()) -eq $thumb } | Select-Object -First 1",
+            '    if ($c) {',
+            '      $hasPk = $null',
+            '      try { $hasPk = [bool]$c.HasPrivateKey } catch { $hasPk = $null }',
+            '      $o = @{ exists=$true; foundInStore=$s; hasPrivateKey=$hasPk; checkedStores=$stores } | ConvertTo-Json -Compress',
+            '      [Console]::Out.Write($o)',
+            '      exit 0',
+            '    }',
+            '  } catch { }',
+            '}',
+            '  $o = @{ exists=$false; foundInStore=$null; hasPrivateKey=$null; checkedStores=$stores } | ConvertTo-Json -Compress',
+            '  [Console]::Out.Write($o)',
+            '  exit 0',
+          ].join('\n');
+          try {
+            const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', probeScript], {
+              windowsHide: true,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              encoding: 'utf8',
+              maxBuffer: 1024 * 1024,
+              env: { ...process.env, VRPLIKE_PROBE_THUMBPRINT: selectedThumbprint.value },
+            });
+            if (r.status !== 0) {
+              return { ok: false as const, message: String(r.stderr ?? '').trim() || 'PowerShell cert probe failed' };
+            }
+            const parsed = safeJsonParse(String(r.stdout ?? '').trim()) as any;
+            return {
+              ok: true as const,
+              exists: Boolean(parsed?.exists),
+              hasPrivateKey:
+                typeof parsed?.hasPrivateKey === 'boolean' ? (parsed.hasPrivateKey as boolean) : (null as any),
+              foundInStore: typeof parsed?.foundInStore === 'string' ? parsed.foundInStore : undefined,
+              checkedStores: Array.isArray(parsed?.checkedStores)
+                ? (parsed.checkedStores as any[]).filter((x) => typeof x === 'string')
+                : ['Cert:\\CurrentUser\\My', 'Cert:\\LocalMachine\\My'],
+            };
+          } catch (e: any) {
+            return { ok: false as const, message: e instanceof Error ? e.message : String(e) };
+          }
+        })();
+
   const report = formatDoctorReport({
     platform: process.platform,
     execPath: process.execPath,
@@ -444,7 +586,7 @@ async function runDoctor(args: { statePath: string }): Promise<void> {
     osHomedir: homedir(),
     appDataFallback: resolveWindowsAppDataFallback(),
     agentJsonPath: args.statePath,
-    signing: { readiness, tools },
+    signing: { cadescom, selectedThumbprint, certInStore, readiness, tools },
     registryCheck: checkVrplikeSignerProtocolRegistryWindows(),
     tray: trayInfo ?? undefined,
   });
@@ -1187,7 +1329,7 @@ function wireHandlers(args: {
               if (readiness.ok) {
                 code = 'SIGNING_TOOL_NOT_FOUND';
                 message =
-                  'CryptoPro CSP/сертификаты обнаружены, но не найдены утилиты подписи (cryptcp/csptest). Установите CryptoPro Tools. Подпись через CAdESCOM будет добавлена в следующей версии.';
+                  'Не найдены утилиты подписи CryptoPro (cryptcp/csptest). Это не означает, что CryptoPro CSP не установлен. В актуальной версии signer на Windows подпись выполняется через CAdESCOM (COM) и не требует cryptcp/csptest; если у вас включён CLI fallback для dev/нестандартных окружений — установите CryptoPro Tools или укажите пути через CRYPTCP_PATH / CSPTEST_PATH / CRYPTOPRO_HOME. Для диагностики запустите: vrplike-signer.exe --doctor.';
               } else {
                 code = readiness.code;
                 message = readiness.message;
