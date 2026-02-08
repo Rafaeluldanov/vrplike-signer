@@ -8,6 +8,7 @@ import * as readline from 'readline';
 
 import { signAuthChallengeAttached, SignerError } from './cryptopro/cryptopro-signer';
 import { listCertificatesCertmgr } from './cryptopro/cryptopro-certmgr';
+import { resolveCryptoProTool } from './cryptopro/cryptopro-tool-resolver';
 import { chooseCertificateThumbprint, filterCertificatesByInn } from './certificate-selection';
 import { apiBaseFromWsUrl, exchangeDeeplinkToken, parseVrplikeSignerDeeplink } from './deeplink';
 import { promptSelectCertificateWinHta } from './ui/win-hta-cert-select';
@@ -18,6 +19,7 @@ import { startIpcServer, trySendIpcMessage, type IpcMessage } from './windows/ip
 import { computeTrayHostPipeName, namedPipePathWindows, resolveTrayHostPaths } from './windows/tray-host';
 import { createFileLogger, hookConsoleToLogger, hookConsoleToTeeLogger, type Logger } from './log';
 import { computeBackgroundChildArgs, computeLauncherForwardMessage, isDeeplinkArg, shouldRunLauncher } from './launcher-plan';
+import { checkWindowsSigningReadiness } from './crypto/windows-cert-store';
 
 // Runtime invariant (Windows portable exe):
 // - default mode (double click / deeplink / autorun) is LAUNCHER:
@@ -228,6 +230,14 @@ export type DoctorInfo = {
   appDataFallback: string;
   agentJsonPath: string;
   registryCheck: RegistryCheck | null;
+  signing?: {
+    readiness:
+      | { ok: true; totalCertCount: number; privateKeyCertCount: number; sampleThumbprint?: string }
+      | { ok: false; code: string; message: string };
+    tools:
+      | { ok: true; tool: string; path: string; source: string }
+      | { ok: false; code: string; message: string; checkedPaths?: string[] };
+  };
   tray?: {
     pipeName: string;
     pipePath: string;
@@ -254,6 +264,32 @@ export function formatDoctorReport(info: DoctorInfo): string {
   lines.push(`os.homedir(): ${info.osHomedir}`);
   lines.push(`calculated appDataFallback: ${info.appDataFallback}`);
   lines.push(`agent.json: ${info.agentJsonPath}`);
+  if (info.signing) {
+    const r = info.signing.readiness as any;
+    if (r?.ok) {
+      lines.push(
+        `windows cert-store readiness: OK privateKeyCerts=${r.privateKeyCertCount} totalCerts=${r.totalCertCount}${r.sampleThumbprint ? ` sampleThumbprint=${r.sampleThumbprint}` : ''}`,
+      );
+    } else {
+      lines.push(`windows cert-store readiness: NOT READY code=${String(r?.code ?? '')}`);
+      const msg = String(r?.message ?? '').trim();
+      if (msg) lines.push(`windows cert-store message: ${msg}`);
+    }
+
+    const t = info.signing.tools as any;
+    if (t?.ok) {
+      lines.push(`signing tools (cryptcp/csptest): FOUND tool=${t.tool} source=${t.source} path=${t.path}`);
+    } else {
+      lines.push(`signing tools (cryptcp/csptest): NOT FOUND code=${String(t?.code ?? '')}`);
+      const msg = String(t?.message ?? '').trim();
+      if (msg) lines.push(`signing tools message: ${msg}`);
+      const checked = Array.isArray(t?.checkedPaths) ? (t.checkedPaths as any[]).filter((x) => typeof x === 'string') : [];
+      if (checked.length) {
+        lines.push('signing tools checked paths:');
+        for (const p of checked as string[]) lines.push(`— ${p}`);
+      }
+    }
+  }
 
   if (info.registryCheck) {
     lines.push(`registry vrplike-signer://: ${info.registryCheck.ok ? 'YES' : 'NO'}`);
@@ -362,6 +398,39 @@ async function runDoctor(args: { statePath: string }): Promise<void> {
           return { pipeName, pipePath, expectedExePath, expectedExeExists, expectedExeSize, pipeServerRunning };
         })();
 
+  const readiness =
+    process.platform === 'win32'
+      ? await checkWindowsSigningReadiness().then((r) =>
+          r.ok ? r : { ok: false as const, code: r.code, message: r.message },
+        )
+      : ({ ok: false as const, code: 'N/A', message: 'n/a (non-windows)' } as const);
+
+  const tools =
+    process.platform === 'win32'
+      ? await resolveCryptoProTool({
+          preferredTool: 'cryptcp',
+          envCryptcpPath: process.env.CRYPTCP_PATH ?? null,
+          envCsptestPath: process.env.CSPTEST_PATH ?? null,
+          cryptoProHome: process.env.CRYPTOPRO_HOME ?? null,
+        })
+          .then((res) => ({ ok: true as const, tool: res.tool, path: res.path, source: res.source }))
+          .catch((e: any) => {
+            if (e instanceof SignerError) {
+              const checkedPaths =
+                e.details && typeof e.details === 'object' && 'checkedPaths' in (e.details as any)
+                  ? ((e.details as any).checkedPaths as unknown)
+                  : null;
+              return {
+                ok: false as const,
+                code: e.code,
+                message: e.message,
+                checkedPaths: Array.isArray(checkedPaths) ? checkedPaths : undefined,
+              };
+            }
+            return { ok: false as const, code: 'ERROR', message: e instanceof Error ? e.message : String(e) };
+          })
+      : ({ ok: false as const, code: 'N/A', message: 'n/a (non-windows)' } as const);
+
   const report = formatDoctorReport({
     platform: process.platform,
     execPath: process.execPath,
@@ -375,6 +444,7 @@ async function runDoctor(args: { statePath: string }): Promise<void> {
     osHomedir: homedir(),
     appDataFallback: resolveWindowsAppDataFallback(),
     agentJsonPath: args.statePath,
+    signing: { readiness, tools },
     registryCheck: checkVrplikeSignerProtocolRegistryWindows(),
     tray: trayInfo ?? undefined,
   });
@@ -1108,9 +1178,21 @@ function wireHandlers(args: {
               signatureBase64: buf.toString('base64'),
             });
           })
-          .catch((err: any) => {
-            const code = err instanceof SignerError ? err.code : 'SIGN_FAILED';
-            const message = err instanceof Error ? err.message : String(err);
+          .catch(async (err: any) => {
+            let code: string = err instanceof SignerError ? err.code : 'SIGN_FAILED';
+            let message = err instanceof Error ? err.message : String(err);
+
+            if (process.platform === 'win32' && err instanceof SignerError && err.code === 'SIGNING_TOOL_NOT_FOUND') {
+              const readiness = await checkWindowsSigningReadiness();
+              if (readiness.ok) {
+                code = 'SIGNING_TOOL_NOT_FOUND';
+                message =
+                  'CryptoPro CSP/сертификаты обнаружены, но не найдены утилиты подписи (cryptcp/csptest). Установите CryptoPro Tools. Подпись через CAdESCOM будет добавлена в следующей версии.';
+              } else {
+                code = readiness.code;
+                message = readiness.message;
+              }
+            }
 
             // eslint-disable-next-line no-console
             console.error(`[agent] SIGN_RESULT error requestId=${requestId} code=${code}`);

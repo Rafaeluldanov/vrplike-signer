@@ -43,9 +43,13 @@ export function spawnWithTimeout(cmd: string, args: string[], timeoutMs: number)
       // ENOENT typically means tool not found.
       if (err?.code === 'ENOENT') {
         reject(
-          new SignerError('CRYPTOPRO_NOT_FOUND', 'CryptoPro CSP не найден. Установите CryptoPro CSP.', {
+          new SignerError(
+            'SIGNING_TOOL_NOT_FOUND',
+            'Не найдены утилиты подписи CryptoPro (cryptcp/csptest). Установите CryptoPro Tools или укажите путь через CRYPTCP_PATH / CSPTEST_PATH / CRYPTOPRO_HOME.',
+            {
             checkedPaths: [cmd],
-          }),
+            },
+          ),
         );
         return;
       }

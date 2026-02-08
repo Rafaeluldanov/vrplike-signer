@@ -122,8 +122,10 @@ export async function resolveCryptoProTool(opts?: {
     if (existsSync(p.path)) return { tool: p.tool, path: p.path, source: 'STANDARD_PATH' };
   }
 
-  throw new SignerError('CRYPTOPRO_NOT_FOUND', 'CryptoPro CSP не найден. Установите CryptoPro CSP.', {
-    checkedPaths,
-  });
+  throw new SignerError(
+    'SIGNING_TOOL_NOT_FOUND',
+    'Не найдены утилиты подписи CryptoPro (cryptcp/csptest). CryptoPro CSP может быть установлен, но для подписи в текущей версии signer нужны утилиты CryptoPro Tools.',
+    { checkedPaths },
+  );
 }
 

@@ -15,6 +15,15 @@ describe('index --doctor', () => {
       osHomedir: 'C:\\Users\\x',
       appDataFallback: 'C:\\Users\\x\\AppData\\Roaming',
       agentJsonPath: 'C:\\Users\\x\\AppData\\Roaming\\vrplike-signer\\agent.json',
+      signing: {
+        readiness: { ok: true, totalCertCount: 2, privateKeyCertCount: 1, sampleThumbprint: 'AABB' },
+        tools: {
+          ok: false,
+          code: 'SIGNING_TOOL_NOT_FOUND',
+          message: 'missing cryptcp/csptest',
+          checkedPaths: ['where cryptcp', 'C:\\Program Files\\Crypto Pro\\CSP\\cryptcp.exe'],
+        },
+      },
       registryCheck: {
         ok: false,
         exitCode: 1,
@@ -34,6 +43,9 @@ describe('index --doctor', () => {
     expect(out).toContain(`os.homedir(): ${info.osHomedir}`);
     expect(out).toContain(`calculated appDataFallback: ${info.appDataFallback}`);
     expect(out).toContain(`agent.json: ${info.agentJsonPath}`);
+    expect(out).toContain('windows cert-store readiness: OK');
+    expect(out).toContain('signing tools (cryptcp/csptest): NOT FOUND');
+    expect(out).toContain('signing tools checked paths:');
     expect(out).toContain('registry vrplike-signer://: NO');
     expect(out).toContain('registry command: reg.exe query');
     expect(out).toContain('registry output:');

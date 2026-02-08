@@ -13,8 +13,12 @@
 
 ### Windows (для REAL подписи)
 
-- Установлен **CryptoPro CSP**
-- Сертификат/контейнер доступен на этой машине (реестр/токен/смарт‑карта)
+- **Готовность к подписи (readiness)**: в хранилище сертификатов Windows должен быть **хотя бы один сертификат с доступным закрытым ключом**
+  - проверяются `CurrentUser\My` и `LocalMachine\My`
+  - если сертификата с закрытым ключом нет — агент будет возвращать `CERT_NOT_FOUND`
+- Для **текущего способа подписи** агенту нужны утилиты CryptoPro Tools: `cryptcp.exe` / `csptest.exe`
+  - если утилиты отсутствуют — при попытке подписи будет ошибка `SIGNING_TOOL_NOT_FOUND` (это **не означает**, что CSP не установлен)
+- CryptoPro CSP должен быть установлен/доступен в системе, а сертификат/контейнер — доступен на этой машине (реестр/токен/смарт‑карта)
 - Агент **автоматически находит** `cryptcp.exe` / `csptest.exe` (без настройки `PATH`, без PowerShell, без прав администратора)
   - при необходимости можно задать override:
     - `CRYPTCP_PATH` / `CSPTEST_PATH` (абсолютный путь к exe)
@@ -61,7 +65,8 @@ Runtime:
 
 Выводит (без секретов):
 - platform
-- найден ли `cryptcp/csptest` + источник (ENV / PATH / STANDARD_PATH)
+- readiness по Windows certificate store: сколько сертификатов найдено и сколько из них с закрытым ключом
+- найден ли `cryptcp/csptest` + источник (ENV / PATH / STANDARD_PATH) или список проверенных путей
 - путь к `agent.json`
 - зарегистрирован ли `vrplike-signer://` (через `reg.exe query`)
 - tray-host diagnostics (Windows):
@@ -186,10 +191,13 @@ pnpm --filter @vrplike/edo-signer-agent smoke:sign-challenge -- --challenge "pin
 - **“не найден сертификат / NO_CERTIFICATE_SELECTED”**:
   - передайте `--certificateRef` (thumbprint) в smoke, или
   - задайте `CERT_THUMBPRINT` / `CERT_SUBJECT` / `CONTAINER_NAME`
-- **“cryptcp не найден / CRYPTOPRO_NOT_FOUND”**:
-  - установите CryptoPro CSP и повторите
-  - для диагностики запустите `vrplike-signer.exe --doctor`
+- **`SIGNING_TOOL_NOT_FOUND`** (нет `cryptcp/csptest`):
+  - установите **CryptoPro Tools** (утилиты `cryptcp.exe` / `csptest.exe`)
+  - для диагностики запустите `vrplike-signer.exe --doctor` (покажет readiness и проверенные пути)
   - при необходимости задайте override `CRYPTCP_PATH` / `CSPTEST_PATH` / `CRYPTOPRO_HOME`
+- **`CERT_NOT_FOUND`** (нет сертификата с закрытым ключом):
+  - установите сертификат в хранилище Windows или подключите токен/смарт‑карту
+  - убедитесь, что закрытый ключ доступен текущему пользователю/службе
 - **“нужен PIN”**:
   - задайте `CERT_PIN` и добавьте `{PIN}` в args template (если ваша версия CLI поддерживает передачу PIN)
 - **“ошибка подписи / SIGN_FAILED”**:

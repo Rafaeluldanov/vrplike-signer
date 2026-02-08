@@ -12,7 +12,7 @@ describe('cryptopro-signer', () => {
     } as any })).rejects.toMatchObject({ code: 'NO_CERTIFICATE_SELECTED' });
   });
 
-  test('returns CRYPTOPRO_NOT_FOUND when tool missing', async () => {
+  test('returns SIGNING_TOOL_NOT_FOUND when signing CLI missing', async () => {
     const cfg = {
       tool: 'cryptcp' as const,
       cryptcpPath: 'definitely-missing-cryptcp-binary',
@@ -28,7 +28,7 @@ describe('cryptopro-signer', () => {
       throw new Error('expected to throw');
     } catch (e: any) {
       expect(e).toBeInstanceOf(SignerError);
-      expect(e.code).toBe('CRYPTOPRO_NOT_FOUND');
+      expect(e.code).toBe('SIGNING_TOOL_NOT_FOUND');
     }
   });
 });

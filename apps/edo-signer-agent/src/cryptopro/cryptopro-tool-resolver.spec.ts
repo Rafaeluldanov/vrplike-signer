@@ -104,7 +104,7 @@ describe('cryptopro-tool-resolver (Windows)', () => {
     expect(res).toEqual({ tool: 'cryptcp', path: standard, source: 'STANDARD_PATH' });
   });
 
-  test('nothing found → CRYPTOPRO_NOT_FOUND', async () => {
+  test('nothing found → SIGNING_TOOL_NOT_FOUND', async () => {
     (existsSync as any as jest.Mock).mockReturnValue(false);
     (spawn as any as jest.Mock).mockImplementation((_cmd: string, _args: string[]) => mockSpawnResult({ stdout: '', exitCode: 1 }));
 
@@ -118,8 +118,8 @@ describe('cryptopro-tool-resolver (Windows)', () => {
       throw new Error('expected to throw');
     } catch (e: any) {
       expect(e).toBeInstanceOf(SignerError);
-      expect(e.code).toBe('CRYPTOPRO_NOT_FOUND');
-      expect(e.message).toBe('CryptoPro CSP не найден. Установите CryptoPro CSP.');
+      expect(e.code).toBe('SIGNING_TOOL_NOT_FOUND');
+      expect(e.message).toContain('Не найдены утилиты подписи CryptoPro');
       expect(e.details).toBeTruthy();
       const checked = (e.details as any).checkedPaths as string[];
       expect(Array.isArray(checked)).toBe(true);
