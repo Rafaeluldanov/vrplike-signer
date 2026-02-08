@@ -20,8 +20,7 @@ jobs:
         with:
           node-version: "20"
 
-      # ✅ Fix: pnpm must exist in PATH on Windows runner.
-      # Also must match package.json "packageManager": "pnpm@9.15.9"
+      # pnpm must exist in PATH on Windows runner and match package.json packageManager
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -44,6 +43,26 @@ jobs:
 
       - name: Prepare installer build inputs
         run: pnpm -w run signer:prepare:installer
+
+      # ✅ HARD GUARANTEE for Inno inputs (fixes missing installer/installer/build/vrplike-signer.exe)
+      - name: Ensure Inno build inputs exist (copy agent+tray into installer/installer/build)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer\installer\build | Out-Null
+
+          # agent exe from pkg output
+          Copy-Item -Force apps\edo-signer-agent\dist-exe\vrplike-signer.exe installer\installer\build\vrplike-signer.exe
+
+          # tray-host exe normalized by signer:build:tray-host:win
+          Copy-Item -Force installer\build\vrplike-signer-tray.exe installer\installer\build\vrplike-signer-tray.exe
+
+          # optional icon if required by .iss
+          if (Test-Path apps\edo-signer-agent\assets\tray.ico) {
+            Copy-Item -Force apps\edo-signer-agent\assets\tray.ico installer\installer\build\tray.ico
+          }
+
+          Write-Host "== installer/installer/build =="
+          Get-ChildItem installer\installer\build | Format-Table Name,Length
 
       - name: Install Inno Setup (ISCC)
         run: choco install innosetup -y
