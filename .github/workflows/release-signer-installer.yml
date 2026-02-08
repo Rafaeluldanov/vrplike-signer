@@ -34,7 +34,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "6.0.x"
+          dotnet-version: "8.0.x"
 
       - name: Build agent (pkg -> vrplike-signer.exe)
         run: pnpm -w run signer:build:agent:win
