@@ -11,7 +11,7 @@ import {
 import { resolveCryptoProTool } from './cryptopro-tool-resolver';
 import { spawnWithTimeout } from './spawn';
 import { SignerError, type SignerErrorCode } from './signer-error';
-import { signBase64ViaCadesCom } from '../crypto/cadescom-signing';
+import { listCertsWithPrivateKeyViaPowerShell, signBase64ViaCadesCom } from '../crypto/cadescom-signing';
 
 export { SignerError, type SignerErrorCode };
 
@@ -54,6 +54,28 @@ export async function signAuthChallengeAttached(
     certSubject: config.certSubject,
     containerName: config.containerName,
   });
+
+  const selectedThumbprint = selection?.kind === 'thumbprint' ? selection.thumbprint : null;
+
+  // Windows invariant:
+  // If thumbprint is NOT selected, do NOT fallback to cryptcp/csptest.
+  // Surface certificate-specific errors only.
+  if (process.platform === 'win32' && !selectedThumbprint) {
+    const checkedStores = ['CurrentUser\\My', 'LocalMachine\\My'];
+    const certs = await listCertsWithPrivateKeyViaPowerShell();
+    if (certs.length === 0) {
+      throw new SignerError(
+        'CERT_NOT_FOUND',
+        'Сертификат с закрытым ключом не найден. Установите сертификат и повторите.',
+        { checkedStores, availableCertsCount: 0 },
+      );
+    }
+    throw new SignerError(
+      'CERT_NOT_SELECTED',
+      'Сертификат не выбран. Нажмите «Сменить сертификат» и выберите сертификат для подписи.',
+      { checkedStores, availableCertsCount: certs.length },
+    );
+  }
 
   if (!selection) {
     throw new SignerError(

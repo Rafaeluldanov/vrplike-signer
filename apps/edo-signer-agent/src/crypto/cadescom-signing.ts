@@ -5,6 +5,8 @@ import { SignerError, type SignerErrorCode, type SignerErrorDetails } from '../c
 export type CadesSignInput = { dataBase64: string; thumbprint: string };
 export type CadesSignResult = { signatureBase64: string };
 
+export type CadesCertInfo = { thumbprint: string; store: string; hasPrivateKey: boolean };
+
 const POWERSHELL_FLAGS = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass'] as const;
 
 function normalizeThumbprintStrict(raw: string): string {
@@ -20,6 +22,13 @@ function stripPemAndWhitespace(s: string): string {
     .replace(/-----BEGIN[^-]*-----/g, '')
     .replace(/-----END[^-]*-----/g, '')
     .replace(/\s+/g, '');
+}
+
+function normalizeThumbprintFromPowerShell(raw: string): string {
+  // PowerShell cert Thumbprint can contain spaces — normalize to uppercase, no whitespace.
+  return String(raw ?? '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
 }
 
 type RunResult = { exitCode: number | null; stdout: string; stderr: string };
@@ -248,5 +257,70 @@ export async function signBase64ViaCadesCom(input: CadesSignInput): Promise<Cade
   }
 
   return { signatureBase64 };
+}
+
+export async function listCertsWithPrivateKeyViaPowerShell(): Promise<CadesCertInfo[]> {
+  if (process.platform !== 'win32') return [];
+
+  const checkedStores = ['CurrentUser\\My', 'LocalMachine\\My'];
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$out = @()',
+    "Get-ChildItem -Path 'Cert:\\CurrentUser\\My' | Where-Object { $_.HasPrivateKey -eq $true } | ForEach-Object {",
+    "  $out += [PSCustomObject]@{ thumbprint = [string]$_.Thumbprint; store = 'CurrentUser\\\\My'; hasPrivateKey = [bool]$_.HasPrivateKey }",
+    '}',
+    "Get-ChildItem -Path 'Cert:\\LocalMachine\\My' | Where-Object { $_.HasPrivateKey -eq $true } | ForEach-Object {",
+    "  $out += [PSCustomObject]@{ thumbprint = [string]$_.Thumbprint; store = 'LocalMachine\\\\My'; hasPrivateKey = [bool]$_.HasPrivateKey }",
+    '}',
+    '$out | ConvertTo-Json -Compress',
+  ].join('\n');
+
+  let res: RunResult;
+  try {
+    res = await runPowerShell({ script, env: {}, timeoutMs: 15000 });
+  } catch (e: any) {
+    throw new SignerError('CRYPTOAPI_FAILED', 'Не удалось проверить сертификаты Windows (PowerShell).', {
+      checkedStores,
+      originalErrorMessage: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  if (res.exitCode !== 0) {
+    throw new SignerError('CRYPTOAPI_FAILED', 'Не удалось проверить сертификаты Windows (PowerShell).', {
+      checkedStores,
+      originalErrorMessage: (res.stderr || res.stdout || '').trim() || undefined,
+    });
+  }
+
+  const raw = String(res.stdout ?? '').trim();
+  let parsed: unknown;
+  try {
+    parsed = raw ? JSON.parse(raw) : [];
+  } catch {
+    throw new SignerError('CRYPTOAPI_FAILED', 'Не удалось проверить сертификаты Windows (PowerShell).', {
+      checkedStores,
+      originalErrorMessage: 'Invalid JSON from PowerShell.',
+    });
+  }
+
+  const arr = Array.isArray(parsed) ? parsed : [parsed];
+  const out: CadesCertInfo[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const thumbprintRaw = (item as any).thumbprint;
+    const storeRaw = (item as any).store;
+    const hasPrivateKeyRaw = (item as any).hasPrivateKey;
+
+    const thumbprint = normalizeThumbprintFromPowerShell(
+      typeof thumbprintRaw === 'string' ? thumbprintRaw : String(thumbprintRaw ?? ''),
+    );
+    const store = typeof storeRaw === 'string' ? storeRaw : String(storeRaw ?? '');
+    const hasPrivateKey = Boolean(hasPrivateKeyRaw);
+
+    if (!thumbprint) continue;
+    if (store !== 'CurrentUser\\My' && store !== 'LocalMachine\\My') continue;
+    out.push({ thumbprint, store, hasPrivateKey });
+  }
+  return out;
 }
 

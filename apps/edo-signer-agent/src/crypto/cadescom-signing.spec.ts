@@ -79,5 +79,33 @@ describe('cadescom-signing', () => {
       code: 'CADESCOM_NOT_AVAILABLE',
     });
   });
+
+  test('lists certs with private key via PowerShell and normalizes thumbprints', async () => {
+    const calls: SpawnCall[] = [];
+    const { spawn } = require('child_process');
+    spawn.mockImplementation((cmd: string, args: string[], opts: any) => {
+      calls.push({ cmd, args, opts });
+      return makeFakeChild({
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { thumbprint: 'aa bb', store: 'CurrentUser\\My', hasPrivateKey: true },
+          { thumbprint: 'cc dd', store: 'LocalMachine\\My', hasPrivateKey: true },
+        ]),
+      });
+    });
+
+    const { listCertsWithPrivateKeyViaPowerShell } = require('./cadescom-signing');
+    const list = await listCertsWithPrivateKeyViaPowerShell();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cmd).toBe('powershell.exe');
+    expect(calls[0]!.args).toEqual(
+      expect.arrayContaining(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command']),
+    );
+    expect(list).toEqual([
+      { thumbprint: 'AABB', store: 'CurrentUser\\My', hasPrivateKey: true },
+      { thumbprint: 'CCDD', store: 'LocalMachine\\My', hasPrivateKey: true },
+    ]);
+  });
 });
 

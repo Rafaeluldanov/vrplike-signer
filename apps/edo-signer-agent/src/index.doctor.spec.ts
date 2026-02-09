@@ -19,6 +19,7 @@ describe('index --doctor', () => {
         cadescom: { ok: true },
         selectedThumbprint: { value: 'AABBCC', source: 'env:CERTIFICATE_REF' },
         certInStore: { ok: true, exists: true, hasPrivateKey: true, foundInStore: 'Cert:\\CurrentUser\\My', checkedStores: ['Cert:\\CurrentUser\\My','Cert:\\LocalMachine\\My'] },
+        certsWithPrivateKeyFound: 1,
         readiness: { ok: true, totalCertCount: 2, privateKeyCertCount: 1, sampleThumbprint: 'AABB' },
         tools: {
           ok: false,
@@ -48,6 +49,7 @@ describe('index --doctor', () => {
     expect(out).toContain(`agent.json: ${info.agentJsonPath}`);
     expect(out).toContain('CAdESCOM available: YES');
     expect(out).toContain('cert thumbprint selected: AABBCC');
+    expect(out).toContain('Certs with private key found: 1');
     expect(out).toContain('cert exists in store: YES');
     expect(out).toContain('cert has private key: YES');
     expect(out).toContain('windows cert-store readiness: OK');
@@ -55,6 +57,11 @@ describe('index --doctor', () => {
     expect(out).toContain('signing tools checked paths:');
     expect(out).toContain('registry vrplike-signer://: NO');
     expect(out).toContain('registry command: reg.exe query');
+    expect(out).toContain('registry output:');
+  });
+});
+
+');
     expect(out).toContain('registry output:');
   });
 });

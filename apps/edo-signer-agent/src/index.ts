@@ -21,6 +21,7 @@ import { computeTrayHostPipeName, namedPipePathWindows, resolveTrayHostPaths } f
 import { createFileLogger, hookConsoleToLogger, hookConsoleToTeeLogger, type Logger } from './log';
 import { computeBackgroundChildArgs, computeLauncherForwardMessage, isDeeplinkArg, shouldRunLauncher } from './launcher-plan';
 import { checkWindowsSigningReadiness } from './crypto/windows-cert-store';
+import { listCertsWithPrivateKeyViaPowerShell } from './crypto/cadescom-signing';
 
 // Runtime invariant (Windows portable exe):
 // - default mode (double click / deeplink / autorun) is LAUNCHER:
@@ -239,6 +240,7 @@ export type DoctorInfo = {
     certInStore?:
       | { ok: true; exists: boolean; hasPrivateKey: boolean | null; foundInStore?: string; checkedStores: string[] }
       | { ok: false; message: string };
+    certsWithPrivateKeyFound?: number | null;
     readiness:
       | { ok: true; totalCertCount: number; privateKeyCertCount: number; sampleThumbprint?: string }
       | { ok: false; code: string; message: string };
@@ -287,6 +289,9 @@ export function formatDoctorReport(info: DoctorInfo): string {
       const v = sel.value ? String(sel.value) : '-';
       lines.push(`cert thumbprint selected: ${v}${sel.source ? ` (source=${String(sel.source)})` : ''}`);
     }
+
+    const pk = info.signing.certsWithPrivateKeyFound;
+    lines.push(`Certs with private key found: ${typeof pk === 'number' ? String(pk) : 'UNKNOWN'}`);
 
     const ce = info.signing.certInStore as any;
     if (ce) {
@@ -441,6 +446,13 @@ async function runDoctor(args: { statePath: string }): Promise<void> {
         )
       : ({ ok: false as const, code: 'N/A', message: 'n/a (non-windows)' } as const);
 
+  const certsWithPrivateKeyFound =
+    process.platform === 'win32'
+      ? await listCertsWithPrivateKeyViaPowerShell()
+          .then((list) => list.length)
+          .catch(() => null)
+      : null;
+
   const tools =
     process.platform === 'win32'
       ? await resolveCryptoProTool({
@@ -586,7 +598,7 @@ async function runDoctor(args: { statePath: string }): Promise<void> {
     osHomedir: homedir(),
     appDataFallback: resolveWindowsAppDataFallback(),
     agentJsonPath: args.statePath,
-    signing: { cadescom, selectedThumbprint, certInStore, readiness, tools },
+    signing: { cadescom, selectedThumbprint, certInStore, certsWithPrivateKeyFound, readiness, tools },
     registryCheck: checkVrplikeSignerProtocolRegistryWindows(),
     tray: trayInfo ?? undefined,
   });

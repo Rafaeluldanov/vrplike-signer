@@ -1,9 +1,11 @@
 export type SignerErrorCode =
   | 'NO_CERTIFICATE_SELECTED'
   | 'NO_CERT_FOUND_FOR_INN'
+  | 'CERT_NOT_SELECTED'
   | 'CRYPTOPRO_NOT_FOUND'
   | 'SIGNING_TOOL_NOT_FOUND'
   | 'CADESCOM_NOT_AVAILABLE'
+  | 'CRYPTOAPI_FAILED'
   | 'CERT_NOT_FOUND'
   | 'CERT_NO_PRIVATE_KEY'
   | 'SIGNING_FAILED'
@@ -16,6 +18,7 @@ export type SignerErrorCode =
   | 'USER_CANCELLED';
 
 export type SignerErrorDetails = {
+  availableCertsCount?: number;
   checkedStores?: string[];
   thumbprint?: string;
   hresult?: string;
